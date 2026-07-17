@@ -45,41 +45,20 @@ import {
   type ThemeMode,
 } from "./settings";
 import { skinOptions } from "./skins";
-
-type RateLimitWindow = {
-  usedPercent: number;
-  windowDurationMins: number | null;
-  resetsAt: number | null;
-};
-
-type CreditsSnapshot = {
-  balance: string | null;
-  hasCredits: boolean;
-  unlimited: boolean;
-};
-
-type RateLimitSnapshot = {
-  credits: CreditsSnapshot | null;
-  limitId: string | null;
-  limitName: string | null;
-  planType: string | null;
-  primary: RateLimitWindow | null;
-  rateLimitReachedType: string | null;
-  secondary: RateLimitWindow | null;
-};
-
-type RateLimitsResponse = {
-  rateLimits: RateLimitSnapshot;
-  rateLimitsByLimitId: Record<string, RateLimitSnapshot> | null;
-};
+import {
+  DEFAULT_RATE_LIMIT_ID,
+  rateLimitBuckets as buildRateLimitBuckets,
+  rateLimitWindows,
+  remainingPercent,
+  resolveActiveLimit,
+  type RateLimitSnapshot,
+  type RateLimitsResponse,
+  type RateLimitWindow,
+} from "./rateLimits";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type WindowKind = "ball" | "main" | "settings";
-type LowNoticeWindowKey = "fiveHour" | "sevenDay";
-type RateLimitBucketOption = {
-  id: string;
-  name: string;
-};
+type LowNoticeWindowKey = string;
 
 type Copy = {
   appAria: string;
@@ -149,7 +128,6 @@ const DRAG_START_THRESHOLD_PX = 5;
 const BALL_CLICK_REFRESH_DELAY_MS = 220;
 const BALL_CONTEXT_MENU_WIDTH = 104;
 const BALL_CONTEXT_MENU_HEIGHT = 78;
-const DEFAULT_RATE_LIMIT_ID = "__default__";
 
 const copy: Record<Language, Copy> = {
   "zh-CN": {
@@ -187,7 +165,7 @@ const copy: Record<Language, Copy> = {
     theme: "主题",
     themeSkin: "主题皮肤",
     activeRateLimitBucket: "模型用量桶",
-    defaultRateLimitBucket: "默认桶(默认)",
+    defaultRateLimitBucket: "Codex 总额度",
     rateLimitBucketAria: "当前显示模型用量桶",
     showRateLimit: (selected) => (selected ? "正在展示" : "切换展示"),
     followSystem: "跟随系统",
@@ -248,7 +226,7 @@ const copy: Record<Language, Copy> = {
     theme: "Theme",
     themeSkin: "Skin",
     activeRateLimitBucket: "Rate limit bucket",
-    defaultRateLimitBucket: "Default bucket",
+    defaultRateLimitBucket: "Codex total",
     rateLimitBucketAria: "Rate limit bucket",
     showRateLimit: (selected) => (selected ? "Showing" : "Switch"),
     followSystem: "System",
@@ -358,55 +336,21 @@ function persistSettings(settings: AppSettings) {
   window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
 }
 
-function clampPercent(value: number) {
-  return Math.min(100, Math.max(0, value));
-}
-
-function remainingPercent(windowData: RateLimitWindow | null) {
-  if (!windowData) return null;
-  return 100 - clampPercent(windowData.usedPercent);
-}
-
 function limitName(limit: RateLimitSnapshot | null, text: Copy) {
-  return limit?.limitName || limit?.limitId || text.defaultRateLimitBucket;
+  if (limit?.limitName) return limit.limitName;
+  if (!limit?.limitId || limit.limitId === "codex") return text.defaultRateLimitBucket;
+  return limit.limitId;
 }
 
-function resolveActiveLimit(
-  usage: RateLimitsResponse | null,
-  activeRateLimitId: string,
-) {
-  if (!usage) return null;
-  if (
-    activeRateLimitId &&
-    activeRateLimitId !== DEFAULT_RATE_LIMIT_ID &&
-    usage.rateLimitsByLimitId?.[activeRateLimitId]
-  ) {
-    return usage.rateLimitsByLimitId[activeRateLimitId];
-  }
-
-  return usage.rateLimits;
-}
-
-function resolveRateLimitBucketOptions(
-  usage: RateLimitsResponse | null,
-  text: Copy,
-) {
-  const options: RateLimitBucketOption[] = [
-    { id: DEFAULT_RATE_LIMIT_ID, name: text.defaultRateLimitBucket },
-  ];
-
-  if (!usage?.rateLimitsByLimitId) return options;
-
-  for (const [limitId, limit] of Object.entries(usage.rateLimitsByLimitId)) {
-    if (limitId === DEFAULT_RATE_LIMIT_ID) continue;
-    if (!limit) continue;
-    options.push({
-      id: limitId,
-      name: limitName(limit, text),
-    });
-  }
-
-  return options;
+function formatPlanType(planType: string | null | undefined) {
+  if (!planType) return "--";
+  const normalized = planType.toLowerCase();
+  if (normalized === "plus") return "Plus";
+  if (normalized === "pro") return "Pro";
+  if (normalized === "team") return "Team";
+  if (normalized === "business") return "Business";
+  if (normalized === "enterprise") return "Enterprise";
+  return planType;
 }
 
 function readLowNoticeState(): Record<string, true> {
@@ -516,20 +460,15 @@ function useLowLimitNotifications(
     if (!activeLimit) return;
 
     const threshold = settings.lowNoticeThreshold;
-    maybeNotifyLowLimit({
-      remaining: remainingPercent(activeLimit.primary),
-      text,
-      threshold,
-      windowKey: "fiveHour",
-      windowName: text.windowFiveHours,
-    });
-    maybeNotifyLowLimit({
-      remaining: remainingPercent(activeLimit.secondary),
-      text,
-      threshold,
-      windowKey: "sevenDay",
-      windowName: text.windowSevenDays,
-    });
+    for (const windowData of rateLimitWindows(activeLimit)) {
+      maybeNotifyLowLimit({
+        remaining: remainingPercent(windowData.value),
+        text,
+        threshold,
+        windowKey: windowData.key,
+        windowName: formatWindowName(windowData.value, text.shortFallback, text),
+      });
+    }
   }, [activeLimit, settings.lowNoticeThreshold, text]);
 }
 
@@ -559,6 +498,12 @@ function formatWindowName(windowData: RateLimitWindow | null, fallback: string, 
     return text.hourWindow(windowData.windowDurationMins / 60);
   }
   return text.minuteWindow(windowData.windowDurationMins);
+}
+
+function formatWindowShortName(windowData: RateLimitWindow | null, text: Copy) {
+  if (windowData?.windowDurationMins === 300) return text.windowFiveHoursShort;
+  if (windowData?.windowDurationMins === 10080) return text.windowSevenDaysShort;
+  return formatWindowName(windowData, text.shortFallback, text).replace(/\s*窗口$/, "");
 }
 
 function getTone(percent: number | null) {
@@ -982,17 +927,25 @@ function BallView() {
   const clickRefreshTimerRef = useRef<number | null>(null);
   const activeLimit = resolveActiveLimit(usage, settings.activeRateLimitId);
   useLowLimitNotifications(activeLimit, settings, text);
-  const primaryRemaining = remainingPercent(activeLimit?.primary ?? null);
-  const secondaryRemaining = remainingPercent(activeLimit?.secondary ?? null);
+  const displayWindows = rateLimitWindows(activeLimit);
+  const primaryWindow = displayWindows[0]?.value ?? null;
+  const secondaryWindow = displayWindows[1]?.value ?? null;
+  const primaryRemaining = remainingPercent(primaryWindow);
+  const secondaryRemaining = remainingPercent(secondaryWindow);
   const primaryTone = getTone(primaryRemaining);
   const secondaryTone = getTone(secondaryRemaining);
   const primaryPercentText = formatBallPercent(primaryRemaining);
   const secondaryPercentText = formatBallPercent(secondaryRemaining);
+  const hasSecondaryWindow = Boolean(secondaryWindow);
   const ballStyle = {
     "--ball-primary-progress": `${primaryRemaining ?? 0}`,
     "--ball-secondary-progress": `${secondaryRemaining ?? 0}`,
   } as CSSProperties;
-  const ballTitle = `${limitName(activeLimit, text)}：${text.windowFiveHoursShort} ${primaryPercentText} ${text.windowSevenDaysShort} ${secondaryPercentText}`;
+  const ballTitle = displayWindows.length
+    ? `${limitName(activeLimit, text)}：${displayWindows
+        .map((windowData) => `${formatWindowShortName(windowData.value, text)} ${formatBallPercent(remainingPercent(windowData.value))}`)
+        .join(" · ")}`
+    : limitName(activeLimit, text);
 
   const clearClickRefreshTimer = useCallback(() => {
     if (clickRefreshTimerRef.current === null) return;
@@ -1106,7 +1059,7 @@ function BallView() {
   return (
     <main className="ball-shell" data-skin={settings.skin} data-theme={resolvedTheme}>
       <button
-        className={`usage-ball compact-ball usage-ball-${primaryTone} usage-ball-secondary-${secondaryTone}`}
+        className={`usage-ball compact-ball usage-ball-${primaryTone} usage-ball-secondary-${secondaryTone}${hasSecondaryWindow ? "" : " usage-ball-single"}`}
         type="button"
         aria-label={text.refresh}
         title={ballTitle}
@@ -1124,17 +1077,19 @@ function BallView() {
           <circle className="ball-ring-progress" cx="56" cy="56" r="50" pathLength="100" />
         </svg>
         <span className="ball-core">
-          <span className="ball-window-label">{text.windowFiveHoursShort}</span>
+          <span className="ball-window-label">{formatWindowShortName(primaryWindow, text)}</span>
           <span className="ball-primary-value">{primaryPercentText}</span>
         </span>
-        <span className="ball-secondary-card" aria-label={`${text.windowSevenDaysShort} ${secondaryPercentText}`}>
-          <svg className="ball-ring-inner" viewBox="0 0 44 44" aria-hidden="true">
-            <circle className="ball-ring-secondary-track" cx="22" cy="22" r="18" pathLength="100" />
-            <circle className="ball-ring-secondary-progress" cx="22" cy="22" r="18" pathLength="100" />
-          </svg>
-          <span className="ball-secondary-label">{text.windowSevenDaysShort}</span>
-          <span className="ball-secondary-value">{secondaryPercentText}</span>
-        </span>
+        {secondaryWindow ? (
+          <span className="ball-secondary-card" aria-label={`${formatWindowShortName(secondaryWindow, text)} ${secondaryPercentText}`}>
+            <svg className="ball-ring-inner" viewBox="0 0 44 44" aria-hidden="true">
+              <circle className="ball-ring-secondary-track" cx="22" cy="22" r="18" pathLength="100" />
+              <circle className="ball-ring-secondary-progress" cx="22" cy="22" r="18" pathLength="100" />
+            </svg>
+            <span className="ball-secondary-label">{formatWindowShortName(secondaryWindow, text)}</span>
+            <span className="ball-secondary-value">{secondaryPercentText}</span>
+          </span>
+        ) : null}
       </button>
       {contextMenu ? (
         <div
@@ -1161,26 +1116,14 @@ function MainPanelView() {
 
   const activeLimit = resolveActiveLimit(usage, settings.activeRateLimitId);
   useLowLimitNotifications(activeLimit, settings, text);
+  const displayWindows = useMemo(() => rateLimitWindows(activeLimit), [activeLimit]);
   const rateLimitBuckets = useMemo(() => {
-    return resolveRateLimitBucketOptions(usage, text)
-      .map((bucket) => ({
-        id: bucket.id,
-        name: bucket.name,
-        limit:
-          bucket.id === DEFAULT_RATE_LIMIT_ID
-            ? usage?.rateLimits ?? null
-            : usage?.rateLimitsByLimitId?.[bucket.id] ?? null,
-      }))
-      .filter((bucket) => Boolean(bucket.limit));
+    return buildRateLimitBuckets(usage).map((bucket) => ({
+      ...bucket,
+      name: limitName(bucket.limit, text),
+    }));
   }, [usage, text]);
-  const hasMultipleBucketOptions = (usage?.rateLimitsByLimitId
-    ? Object.keys(usage.rateLimitsByLimitId).length
-    : 0) > 1;
-  const canSwitchRateLimit = rateLimitBuckets.length > 1 && hasMultipleBucketOptions;
-
-  const primaryRemaining = remainingPercent(activeLimit?.primary ?? null);
-  const primaryTone = getTone(primaryRemaining);
-  const activeBucketName = limitName(activeLimit, text);
+  const canSwitchRateLimit = rateLimitBuckets.length > 1;
 
   return (
     <main className="app-shell" data-skin={settings.skin} data-theme={resolvedTheme}>
@@ -1225,11 +1168,6 @@ function MainPanelView() {
           </div>
         </header>
 
-        <section className={`headline headline-${primaryTone}`}>
-          <span>{activeBucketName}</span>
-          <strong>{primaryRemaining === null ? "--" : `${primaryRemaining}%`}</strong>
-        </section>
-
         {state === "error" ? (
           <section className="notice">
             <AlertTriangle size={18} />
@@ -1237,25 +1175,31 @@ function MainPanelView() {
           </section>
         ) : null}
 
-        <div className="metrics">
-          <WindowMetric
-            fallbackName={text.shortFallback}
-            language={settings.language}
-            text={text}
-            value={activeLimit?.primary ?? null}
-          />
-          <WindowMetric
-            fallbackName={text.longFallback}
-            language={settings.language}
-            text={text}
-            value={activeLimit?.secondary ?? null}
-          />
+        <div className={`metrics metrics-${displayWindows.length || 1}`}>
+          {displayWindows.length ? (
+            displayWindows.map((windowData, index) => (
+              <WindowMetric
+                fallbackName={index === 0 ? text.shortFallback : text.longFallback}
+                key={windowData.key}
+                language={settings.language}
+                text={text}
+                value={windowData.value}
+              />
+            ))
+          ) : (
+            <WindowMetric
+              fallbackName={text.shortFallback}
+              language={settings.language}
+              text={text}
+              value={null}
+            />
+          )}
         </div>
 
         <section className="summary">
           <div>
             <span>{text.plan}</span>
-            <strong>{activeLimit?.planType ?? "--"}</strong>
+            <strong>{formatPlanType(activeLimit?.planType)}</strong>
           </div>
           <div>
             <span>{text.credits}</span>
@@ -1271,47 +1215,52 @@ function MainPanelView() {
           </div>
         </section>
 
-        <section className="limits">
-          <button
-            className="limits-title"
-            type="button"
-            onClick={() => setShowLimits((current) => !current)}
-          >
-            <span>{text.limitsTitle}</span>
-            <span className="section-action">
-              {showLimits ? text.collapse : text.expand}
-              <ChevronDown size={16} className={showLimits ? "chevron-open" : ""} />
-            </span>
-          </button>
-          {showLimits ? (
-            <div className="limit-list">
-              {rateLimitBuckets.map((bucket) => {
-                const remain = remainingPercent(bucket.limit?.primary ?? null);
-                const selected = settings.activeRateLimitId === bucket.id;
-                return (
-                  <div className="limit-row" key={bucket.id}>
-                    <span>{bucket.name}</span>
-                    {canSwitchRateLimit ? (
-                      <button
-                        className={`rate-limit-switch${selected ? " rate-limit-switch-selected" : ""}`}
-                        type="button"
-                        disabled={selected}
-                        onClick={() => {
-                          if (!selected) {
-                            updateSettings({ activeRateLimitId: bucket.id });
-                          }
-                        }}
-                      >
-                        {text.showRateLimit(selected)}
-                      </button>
-                    ) : null}
-                    <strong>{remain === null ? "--" : `${remain}%`}</strong>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </section>
+        {rateLimitBuckets.length > 1 ? (
+          <section className="limits">
+            <button
+              className="limits-title"
+              type="button"
+              onClick={() => setShowLimits((current) => !current)}
+            >
+              <span>{text.limitsTitle}</span>
+              <span className="section-action">
+                {showLimits ? text.collapse : text.expand}
+                <ChevronDown size={16} className={showLimits ? "chevron-open" : ""} />
+              </span>
+            </button>
+            {showLimits ? (
+              <div className="limit-list">
+                {rateLimitBuckets.map((bucket) => {
+                  const remain = remainingPercent(rateLimitWindows(bucket.limit)[0]?.value ?? null);
+                  const selected =
+                    settings.activeRateLimitId === bucket.id ||
+                    (bucket.id === DEFAULT_RATE_LIMIT_ID &&
+                      settings.activeRateLimitId === usage?.rateLimits.limitId);
+                  return (
+                    <div className="limit-row" key={bucket.id}>
+                      <span>{bucket.name}</span>
+                      {canSwitchRateLimit ? (
+                        <button
+                          className={`rate-limit-switch${selected ? " rate-limit-switch-selected" : ""}`}
+                          type="button"
+                          disabled={selected}
+                          onClick={() => {
+                            if (!selected) {
+                              updateSettings({ activeRateLimitId: bucket.id });
+                            }
+                          }}
+                        >
+                          {text.showRateLimit(selected)}
+                        </button>
+                      ) : null}
+                      <strong>{remain === null ? "--" : `${remain}%`}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         <footer>
           <span>

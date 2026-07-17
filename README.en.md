@@ -2,7 +2,7 @@
 
 [简体中文](README.md)
 
-Codex Usage Ball is a small Windows desktop widget for monitoring Codex account limits. It keeps the 5-hour window, 7-day window, Credits, model buckets, and status visible without reopening Codex pages.
+Codex Usage Ball is a small Windows desktop widget for monitoring the limit windows actually returned for a Codex account, together with Credits, model buckets, and status.
 
 ## Screenshots
 
@@ -12,7 +12,7 @@ Codex Usage Ball is a small Windows desktop widget for monitoring Codex account 
 
 ## Features
 
-- Nested progress-ring floating ball: outer ring for the 5-hour remaining limit, inner ring for the 7-day remaining limit.
+- Adaptive limit windows: one returned window uses a single progress ring; short- and long-term windows use nested rings.
 - Click the floating ball to refresh usage, double-click it to open the main panel, or right-click it for a compact menu.
 - The floating-ball context menu supports hiding the ball and exiting the app.
 - Main panel with remaining limits, reset times, Credits, status, and model usage buckets.
@@ -21,7 +21,7 @@ Codex Usage Ball is a small Windows desktop widget for monitoring Codex account 
 - Light theme, dark theme, and system theme.
 - Six built-in skins: Glass, Night Gauge, Minimal Office, Terminal Green, Sea Teal, and High Contrast.
 - Skin preview and switching in Preferences.
-- Low-limit system notifications for both the 5-hour and 7-day windows.
+- Low-limit system notifications for every window actually returned by Codex CLI.
 - Custom low-limit notification threshold from 1 to 100, defaulting to 15.
 - Each window only notifies once for the current threshold. After the remaining limit recovers above the threshold, the next drop below it can notify again.
 - Simplified Chinese and English UI.

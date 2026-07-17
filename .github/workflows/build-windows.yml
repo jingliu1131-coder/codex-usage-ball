@@ -1,0 +1,51 @@
+name: 构建 Windows 测试安装包
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feat/adaptive-rate-limit-layout
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6.0.9
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装项目依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 运行测试
+        run: pnpm test
+
+      - name: 构建安装包
+        run: pnpm tauri build
+
+      - name: 上传 Windows 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-usage-ball_0.1.6_windows_x64-setup
+          path: src-tauri/target/release/bundle/nsis/*setup.exe
+          if-no-files-found: error
+          retention-days: 7

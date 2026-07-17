@@ -1,8 +1,8 @@
 {
   "name": "codex-usage-ball",
   "private": true,
-  "version": "0.1.1",
-  "description": "Codex 用量悬浮球：桌面查看 Codex 5 小时和 7 天额度窗口",
+  "version": "0.1.6",
+  "description": "Codex 用量悬浮球：按账户实际返回的数据展示 Codex 额度窗口",
   "keywords": [
     "codex",
     "openai-codex",

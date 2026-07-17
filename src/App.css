@@ -250,6 +250,21 @@ button {
   font-weight: 780;
 }
 
+.usage-ball-single .ball-core {
+  inset: 23px;
+  align-content: center;
+}
+
+.usage-ball-single .ball-window-label {
+  margin-top: 0;
+  font-size: 11px;
+}
+
+.usage-ball-single .ball-primary-value {
+  margin-top: 4px;
+  font-size: 34px;
+}
+
 .usage-ball-good {
   --primary-ring-color: var(--good);
 }
@@ -363,8 +378,11 @@ button {
 }
 
 .main-panel {
+  display: flex;
   width: 100vw;
+  min-height: 100vh;
   max-height: 100vh;
+  flex-direction: column;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -559,7 +577,15 @@ h1 {
 .metrics {
   display: grid;
   gap: 10px;
-  padding: 0 14px 14px;
+  padding: 14px;
+}
+
+.metrics-1 .metric {
+  min-height: 92px;
+}
+
+.metrics-1 .metric strong {
+  font-size: 34px;
 }
 
 .metric {
@@ -942,6 +968,7 @@ h1 {
 }
 
 footer {
+  margin-top: auto;
   padding-top: 10px;
 }
 

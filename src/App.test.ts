@@ -81,13 +81,13 @@ describe("低额度通知", () => {
     expect(appSource).toContain("value={settings.lowNoticeThreshold}");
   });
 
-  test("5 小时和 7 天窗口都会触发一次性系统通知", () => {
+  test("每个实际返回的额度窗口都会触发一次性系统通知", () => {
     expect(appSource).toContain("LOW_NOTICE_STATE_KEY");
     expect(appSource).toContain("sendNotification");
     expect(appSource).toContain("isPermissionGranted");
     expect(appSource).toContain("requestPermission");
-    expect(appSource).toContain("text.windowFiveHours");
-    expect(appSource).toContain("text.windowSevenDays");
+    expect(appSource).toContain("for (const windowData of rateLimitWindows(activeLimit))");
+    expect(appSource).toContain("windowName: formatWindowName(windowData.value");
     expect((appSource.match(/useLowLimitNotifications\(activeLimit, settings, text\);/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
@@ -123,7 +123,7 @@ describe("窗口视觉和滚动容器", () => {
     expect(appStyles).not.toContain(".compact-ball::before");
   });
 
-  test("5 小时中心区域不使用边框", () => {
+  test("悬浮球中心区域不使用边框", () => {
     expect(cssBlock(".ball-core")).not.toMatch(/\bborder\s*:/);
   });
 
